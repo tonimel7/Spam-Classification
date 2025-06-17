@@ -1,71 +1,29 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[1]:
-
-
 from sklearn.datasets import fetch_openml
 import pandas as pd
 import numpy as np 
 from sklearn.neighbors import KNeighborsClassifier
+from scipy.stats import loguniform, uniform, randint
+
 from sklearn.model_selection import RandomizedSearchCV, train_test_split
+from sklearn.model_selection import cross_validate, StratifiedKFold
+from sklearn.ensemble import RandomForestClassifier
 
+from sklearn.metrics import accuracy_score, recall_score
 
-# **Exercise 1**
-
-# In[2]:
-
-
-mnist = fetch_openml("mnist_784", as_frame=False)
-X, y = mnist.data, mnist.target
-
-
-# In[3]:
-
-
-X.shape, y.shape
-
-
-# In[4]:
-
-
-X_train, X_test, y_train, y_test = X[:60000], X[60000:], y[:60000], y[60000:]
-
-
-# In[5]:
-
-
-knn_clf = KNeighborsClassifier()
-
-
-# In[6]:
-
-
-params = {"weights": ["uniform", "distance"],
-         "n_neighbors": [3,5,10]}
-
-knn_cv = RandomizedSearchCV(knn_clf, params, cv = 3, scoring = "accuracy")
-knn_cv.fit(X_train, y_train)
-
-
-# **Exercise 4**
-
-# In[7]:
-
+from sklearn.decomposition import TruncatedSVD # we reduce dimensions to improve performance of classifiers
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
 
 from pathlib import Path
 import email
 from bs4 import BeautifulSoup
 
-
-# In[8]:
-
-
+# setting up the folder directory 
 main_dir = Path("C:\\Users\\melis\\Desktop\\BLF\\Chapter 3 - Classification\\corpus")
 
 
-# In[9]:
-
+# This is a function to extract the meaningful email text from the raw email. 
+# It's designed to work on a string of raw text extracted from a raw email file. 
 
 def extract_text_from_email(raw_email: str) -> str:
 
@@ -76,6 +34,7 @@ def extract_text_from_email(raw_email: str) -> str:
     parts = [] # empty list to append the email parts 
 
     for part in msg.walk():# for every PART in a Message object email (HTML, plain text, etc.)
+
         ctype = part.get_content_type() # see what type of content the Message object part is 
         payload = part.get_payload(decode=True) # Get the Message object part and decode it into raw bytes to remove any transport encodings
 
@@ -83,7 +42,7 @@ def extract_text_from_email(raw_email: str) -> str:
             continue # continue and leave the loop  
 
         text = payload.decode("latin-1", errors="ignore") #decode the text in latin characters and ignore errors from 
-        # weird characters
+        # any weird characters that appear
 
         if ctype == "text/html": # if the content type of the Message object part is HTML, 
             text = BeautifulSoup(text, "html.parser") # parse it with BeautifulSoup, which enables us to:
@@ -98,101 +57,75 @@ def extract_text_from_email(raw_email: str) -> str:
 # *: Emails parts come wrapped in MIME transfer encodings (standard that lets email carry more than plain text).
 # We decode these to get raw bytes and then maps each raw byte to the corresponding Latin-1 chart.
 
-
-# In[10]:
-
+#################################################################
+# 1) GO TO EACH FOLDER, 
+# 2) ITERATE OVER EACH FILE, AND FOR EVERY FILE, READ THE TEXT AND APPLY THE FUNCTION TO EXTRACT THE MEANINGFUL PART OF THE TEXT (above function)
+# 3) APPEND THE EXTRACTED PART IN DICTIONARY ALONG WITH THE LABEL (FOR EACH FILE)
 
 records = []
 
-# 1) GO TO EACH FOLDER, 
-# 2) ITERATE OVER EACH FILE, AND FOR EVERY FILE, READ THE TEXT AND APPLY THE FUNCTION TO EXTRACT THE MEANINGFUL PART OF THE TEXT 
-# 3) APPEND THE EXTRACTED PART IN DICTIONARY ALONG WITH THE LABEL (FOR EACH FILE)
-
-for label in ("spam", "ham"): # going over the 2 sub folders
+for label in ("spam", "ham"): # iterating over the 2 sub folders
 
     folder = main_dir / label # the 2 folders are: path/spam or path/ham 
 
-    for file_path in folder.iterdir(): #going to the actual subfolder directory 
+    for file_path in folder.iterdir(): # going to the actual subfolder that contains each email
 
         if not file_path.is_file(): # if the file path is not a file, go to the next loop. (???)
             continue
 
-        raw = file_path.read_text(encoding="latin-1", errors="ignore") # read the text from the file.
+        raw = file_path.read_text(encoding="latin-1", errors="ignore") # gather the entire text from the file.
 
         body = extract_text_from_email(raw) # take the text to the function to extract meaningful part of the email.
 
         records.append({"text": body,
                        "label": label}) # create a dictionary with text and label for classification
-
-
-# In[14]:
-
+        
+############################################################
 
 df = pd.DataFrame(records)
-df
 
+print(">> Data head and tail:")
 
-# In[15]:
+print(df.head())
+print(df.tail())
 
+print(">> Initial data shape: ", df.shape)
 
 df_num = df
-
-
-# In[16]:
-
 
 for i in range(len(df)):
     df_num.loc[i,"label"] = 1 if df.loc[i,"label"] == "spam" else 0 
 
+print(">> value counts of target class: ")
+print(df_num["label"].value_counts()) # slightly imbalanced, 501 spams and 2501 normal messages.
 
-# In[17]:
-
-
-df_num["label"].value_counts() # slightly imbalanced, 501 spams and 2501 normal messages.
-
+######################################################################################################################################
 
 # We have now transformed the multiple email files in the spam & ham subfolders into a dataframe that contains 
-# 
-# ALL emails and their LABELS
-
-# In[18]:
-
+# ALL emails in 1 column and their LABELS (spam=1, normal=0) in another column 
 
 from sklearn.feature_extraction.text import CountVectorizer
 import nltk
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
-from sklearn.pipeline import make_pipeline
+from sklearn.pipeline import make_pipeline, Pipeline
 from sklearn.preprocessing import FunctionTransformer
 from sklearn.compose import ColumnTransformer
 
 stop_words = set(stopwords.words("english"))
 
-
-# In[19]:
-
-
-df_num
-
-
-# In[74]:
-
-
-# remove_stopwords function is designed to work email by email. 
+#### remove_stopwords function is designed to work email by email (email_1_text, email_2_text, ....) 
 
 def remove_stopwords(text):
-    cleaned_words = [] # the clean words will be added here for every row 
-    stop_words = set(stopwords.words('english')) 
+    cleaned_words = [] # empty list to add cleaned tokenized words 
 
     for word in word_tokenize(text, language = "english"): # for every word in text, tokenize it in words based on english language 
         word = word.lower() # lower the word 
 
         if word.isalpha() and word not in stop_words: # if word is alphabetic AND not a stopword,
-            cleaned_words.append(word) # append the word back to the list 
+            cleaned_words.append(word) # append the word to the list 
 
     return cleaned_words # return the cleaned list of words
-
-
 
 def clean_series(X):
     # X(i) is raw text email. The first line applies the remove_stopwords function to i 
@@ -200,97 +133,122 @@ def clean_series(X):
     # second line appends the tokens as strings with an empty space in between
 
     token_list = X.apply(remove_stopwords) # token_list is a Series of lists
-    cleaned_string = token_list.str.join(" ") # this pandas takes EACH list and concatenates its items into 
-    # one string, placing a space in between. We need them in 1 string. 
+    cleaned_string = token_list.str.join(" ") # this pandas takes EACH list and concatenates its items into one string, 
+    # placing a space in between. We need the clean text in 1 string (not list of words) for CountVectorizer to accept it. 
+
     return cleaned_string
-    #return cleaned_string.to_frame() # this line converts to 2D because we need it in 2D to avoid some weird error later
 
 
-# In[75]:
+### Setting up the X and y parts 
+X = df_num[["text"]]
+
+y = df_num["label"]
+y = y.astype(int)
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, shuffle=True, test_size=0.3, stratify = y)
 
 
 # Transformer to apply stopword & number removal, and return a clean string. 
 stopword_transformer = FunctionTransformer(clean_series, validate=False)
 
 
-# In[90]:
-
-
-#YOOOO
-# This pipeline handles stopword and number removal, and transforms into a DTM. 
+# The below pipeline handles stopword and number removal, and transforms into a Document Term Matrix (DTM). 
 
 clean_and_vect = make_pipeline(
     stopword_transformer,
     CountVectorizer()
 )
 
-
-# In[91]:
-
-
-# This transformation applies the pipeline in the text column 
+# This transformation applies the pipeline in the email text column 
 ct = ColumnTransformer(
     transformers = [
         ("clean_email", clean_and_vect, "text")], 
     remainder="drop")
 
-#ct.set_output(transform="pandas")
+trunc_svd = TruncatedSVD(n_components=200, random_state=42)
 
+preprocessing_pipeline = make_pipeline(ct, 
+                        trunc_svd, 
+                        StandardScaler()) # we apply standardization because SVD outputs are unscaled - bad for some classifiers
 
-# In[99]:
+# Pipeline to apply the preprocessing process and apply LogisticRegression
 
-
-from sklearn.decomposition import TruncatedSVD
-from sklearn.linear_model import LogisticRegression
-
-log_reg_pipeline = make_pipeline(ct, 
-                        TruncatedSVD(n_components=150, random_state=42),
+log_reg_pipeline = make_pipeline(preprocessing_pipeline, 
                         LogisticRegression())
 
+preprocessing_pipeline.fit(X_train)
 
-# In[125]:
+svd_fitted = preprocessing_pipeline.named_steps["truncatedsvd"]
 
-
-X = df_num[["text"]]
-
-y = df_num["label"]
-y = y.astype(int)
+print(f">> Variance captured by Trunc. SVD at 200 components: {svd_fitted.explained_variance_ratio_.sum()}")
 
 
-# In[126]:
+### RANDOMIZED SEARCH: FIND BEST PARAMETERS for LOGIT REGRESSION
 
+params_log= {
+    "logisticregression__C": loguniform(1e-4, 1e4),
+    "logisticregression__class_weight" :["balanced", None]
+}
 
-X_train, X_test, y_train, y_test = train_test_split(X, y, shuffle=True, test_size=0.3, stratify = y)
+log_reg_search = RandomizedSearchCV(
+    estimator=log_reg_pipeline,
+    param_distributions=params_log,
+    cv=3,
+    refit=True,
+    scoring="f1",
+    random_state=42,
+    n_jobs=-1
+)
 
+log_reg_search.fit(X_train, y_train)
 
-# In[127]:
+print(">> Randomized search CV - logistic regression - best params: ", log_reg_search.best_params_)
 
-
+####
+# Flattening because of requirements of some function later on 
 y_train.values.ravel()
 
+# Function to cross evaluate model on the train set 
+def evaluate_cv(model, name=None, X=None, y=None, folds=3):
+    scoring =["precision", "recall"]
 
-# In[128]:
+    cv = StratifiedKFold(n_splits=folds)
+
+    scores = cross_validate(model, X, y,cv=cv, 
+                   scoring=scoring, n_jobs=-1)
+    
+    mean_precision= scores["test_precision"].mean()
+    mean_recall = scores["test_recall"].mean()
+    mean_f1 = 2 / ((1/mean_precision) + (1/mean_recall))
+
+    print(f"The CV mean precision and mean recall of the model {name} are {mean_precision}, {mean_recall} respectively")
+    print(f"The CV mean F1 score of the model {name} is {mean_f1}")
+
+evaluate_cv(model = log_reg_search, name = "Logistic Regression (with truncated SVD)", X = X_train, y = y_train)
+
+### RANDOM FOREST CLASSIFIER
+
+rf_pipeline = make_pipeline(preprocessing_pipeline, 
+                            RandomForestClassifier())
 
 
-log_reg_pipeline.fit(X_train, y_train)
+rf_params = {"randomforestclassifier__min_samples_split": [2, 4, 6],
+             "randomforestclassifier__n_estimators": [100,130,180],
+             "randomforestclassifier__max_depth": [8, 12, 16]}
 
 
-# In[130]:
+rf_search = RandomizedSearchCV(rf_pipeline, 
+                               rf_params, 
+                               cv = 3,
+                               refit=True,
+                               scoring="f1",
+                               random_state=42,
+                               n_jobs=-1)
 
+rf_search.fit(X_train, y_train)
 
-y_pred = log_reg_pipeline.predict(X_test)
+print(">> Randomized search CV - Random Forest clf. - best params: ", rf_search.best_params_)
 
-
-# In[133]:
-
-
-from sklearn.metrics import accuracy_score 
-
-accuracy_score(y_pred, y_test)
-
-
-# In[ ]:
-
-
+evaluate_cv(model = rf_search, name = "Random Forest Classifier", X=X_train, y=y_train)
 
 
