@@ -3,22 +3,24 @@ import pandas as pd
 import numpy as np 
 from sklearn.neighbors import KNeighborsClassifier
 from scipy.stats import loguniform, uniform, randint
-
 from sklearn.model_selection import RandomizedSearchCV, train_test_split
 from sklearn.model_selection import cross_validate, StratifiedKFold, cross_val_predict
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.naive_bayes import GaussianNB
-
 from sklearn.metrics import accuracy_score, recall_score, precision_recall_curve
-
 from sklearn.decomposition import TruncatedSVD # we reduce dimensions to improve performance of classifiers
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
-
 from pathlib import Path
 import email
 from bs4 import BeautifulSoup
 import matplotlib.pyplot as plt
+from sklearn.feature_extraction.text import CountVectorizer
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+from sklearn.pipeline import make_pipeline, Pipeline
+from sklearn.preprocessing import FunctionTransformer
+from sklearn.compose import ColumnTransformer
 
 # Folder directory containing the email data. Try/except in case code is run in an interactive environment, where the first 
 # base_dir= does not work.
@@ -26,6 +28,7 @@ try:
     base_dir = Path(__file__).resolve().parent
 except NameError:
     base_dir = Path().cwd() # if running in interactive, just return the working directory
+
 
 corpus_dir = base_dir / "corpus" # this contains the 2 sub folders: spam / ham
 
@@ -61,7 +64,8 @@ def extract_text_from_email(raw_email: str) -> str:
             parts.append(text) # append the text to the parts list 
 
     return "\n".join(parts).strip() # Return the parts, joined together, and remove any whitespace. 1 string per entire email 
-
+# *: Emails parts come wrapped in MIME transfer encodings (things that lets email carry more than plain text).
+# We decode these to get raw bytes and then maps each raw byte to the corresponding Latin-1 chart.
 
 # Function to apply Stratified Cross Validation on the train set, will be used for each model
 
@@ -79,8 +83,53 @@ def evaluate_cv(model, name=None, X=None, y=None, folds=3):
 
     print(f"The CV mean precision and mean recall of the model {name} are {mean_precision}, {mean_recall} respectively")
     print(f"The CV mean F1 score of the model {name} is {mean_f1}")
-# *: Emails parts come wrapped in MIME transfer encodings (things that lets email carry more than plain text).
-# We decode these to get raw bytes and then maps each raw byte to the corresponding Latin-1 chart.
+
+
+#Function to plot the Out Of Fold (oof) Precision-Recall curve.
+def PR_curve_oof(model, X, y, name=None):
+    cv = StratifiedKFold(n_splits=3)
+
+    scores_oof = cross_val_predict( # out of fold prediction scores for X.
+        model, X, y,
+        cv=cv,
+        method = "predict_proba"
+    )[:,1] 
+
+    precisions, recalls, thresholds = precision_recall_curve(y_train, scores_oof)
+
+    #Plotting the curve
+    plt.plot(recalls, precisions, label=name)
+    plt.xlabel("Recall")
+    plt.ylabel("Precisions")
+    plt.title(f"Precision Recall (PR) Curve - {name}")
+    plt.grid(True)
+    plt.legend(loc="lower left")
+    plt.show(block=False)
+
+
+# function to remove stopwords and numbers from text. It returns a list of [cleaned] words.
+def remove_stopwords(text): 
+    cleaned_words = [] # empty list to add cleaned tokenized words 
+
+    for word in word_tokenize(text, language = "english"): # for every word in text, tokenize it in words based on english language 
+        word = word.lower() # lower the word 
+
+        if word.isalpha() and word not in stop_words: # if word is alphabetic AND not a stopword,
+            cleaned_words.append(word) # append the word to the list 
+
+    return cleaned_words # return the cleaned list of words
+
+
+# function to convert list of tokens to a big string
+def clean_series(X):
+    # X(i) is raw text email. The first line applies the remove_stopwords function to i.
+    # The second line appends the tokens as strings with an empty space in between
+
+    token_list = X.apply(remove_stopwords) # token_list is a Series of lists
+    cleaned_string = token_list.str.join(" ") # this pandas takes EACH list and concatenates its items into one string, 
+    # placing a space in between. We need the clean text in 1 string (not list of words) for CountVectorizer to accept it. 
+
+    return cleaned_string
 
 #################################################################
 # 1) GO TO EACH FOLDER, 
@@ -129,39 +178,9 @@ print(df_num["label"].value_counts()) # slightly imbalanced, 501 spams and 2501 
 # We have now transformed the multiple email files in the spam & ham subfolders into a dataframe that contains 
 # ALL emails in 1 column and their LABELS (spam=1, normal=0) in another column 
 
-from sklearn.feature_extraction.text import CountVectorizer
-import nltk
-from nltk.corpus import stopwords
-from nltk.tokenize import word_tokenize
-from sklearn.pipeline import make_pipeline, Pipeline
-from sklearn.preprocessing import FunctionTransformer
-from sklearn.compose import ColumnTransformer
-
 stop_words = set(stopwords.words("english"))
 
 #### remove_stopwords function is designed to work email by email (email_1_text, email_2_text, ....) 
-
-def remove_stopwords(text):
-    cleaned_words = [] # empty list to add cleaned tokenized words 
-
-    for word in word_tokenize(text, language = "english"): # for every word in text, tokenize it in words based on english language 
-        word = word.lower() # lower the word 
-
-        if word.isalpha() and word not in stop_words: # if word is alphabetic AND not a stopword,
-            cleaned_words.append(word) # append the word to the list 
-
-    return cleaned_words # return the cleaned list of words
-
-def clean_series(X):
-    # X(i) is raw text email. The first line applies the remove_stopwords function to i 
-
-    # second line appends the tokens as strings with an empty space in between
-
-    token_list = X.apply(remove_stopwords) # token_list is a Series of lists
-    cleaned_string = token_list.str.join(" ") # this pandas takes EACH list and concatenates its items into one string, 
-    # placing a space in between. We need the clean text in 1 string (not list of words) for CountVectorizer to accept it. 
-
-    return cleaned_string
 
 
 ### Setting up the X and y parts 
@@ -215,7 +234,7 @@ svd_fitted = preprocessing_pipeline.named_steps["truncatedsvd"]
 print(f">> Variance captured by Trunc. SVD at 150 components: {svd_fitted.explained_variance_ratio_.sum()}")
 
 
-### RANDOMIZED SEARCH: FIND BEST PARAMETERS for LOGIT REGRESSION
+### LOGISTIC REGRESSION: RANDOMIZED SEARCH CV
 
 params_log= {
     "logisticregression__C": loguniform(1e-4, 1e4),
@@ -245,34 +264,12 @@ evaluate_cv(model = log_reg_search, name = "Logistic Regression (with truncated 
 
 cv = StratifiedKFold(n_splits=3)
 
-
-#Out Of Fold (oof) predicted probabilities for the train set using cross validation predict.
-
-def PR_curve_oof(model, X, y, name=None):
-    cv = StratifiedKFold(n_splits=3)
-
-    scores_oof = cross_val_predict(
-        model, X, y,
-        cv=cv,
-        method = "predict_proba"
-    )[:,1] 
-
-    precisions, recalls, thresholds = precision_recall_curve(y_train, scores_oof)
-
-    plt.plot(recalls, precisions, label=name)
-    plt.xlabel("Recall")
-    plt.ylabel("Precisions")
-    plt.title(f"Precision Recall (PR) Curve - {name}")
-    plt.grid(True)
-    plt.legend(loc="lower left")
-    plt.show(block=False)
-
 PR_curve_oof(log_reg_search, X_train, y_train, name="Logistic Regression")
 
-### RANDOM FOREST CLASSIFIER
+### RANDOM FOREST CLASSIFIER: RANDOMZIED SEARCH CV
 
 rf_pipeline = make_pipeline(preprocessing_pipeline, 
-                            RandomForestClassifier())
+                            RandomForestClassifier(random_state=42))
 
 
 rf_params = {"randomforestclassifier__min_samples_split": [2, 4, 6],
