@@ -18,8 +18,12 @@ from pathlib import Path
 import email
 from bs4 import BeautifulSoup
 
-# setting up the folder directory 
-main_dir = Path("C:\\Users\\melis\\Desktop\\BLF\\Chapter 3 - Classification\\corpus")
+# Folder directory containing the data 
+base_dir = Path(__file__).resolve().parent
+
+corpus_dir = base_dir / "corpus"
+
+# YOOOO THIS IS MAIN 
 
 
 # This is a function to extract the meaningful email text from the raw email. 
@@ -66,12 +70,9 @@ records = []
 
 for label in ("spam", "ham"): # iterating over the 2 sub folders
 
-    folder = main_dir / label # the 2 folders are: path/spam or path/ham 
+    folder = corpus_dir / label # the 2 folders are: path/spam or path/ham 
 
     for file_path in folder.iterdir(): # going to the actual subfolder that contains each email
-
-        if not file_path.is_file(): # if the file path is not a file, go to the next loop. (???)
-            continue
 
         raw = file_path.read_text(encoding="latin-1", errors="ignore") # gather the entire text from the file.
 
