@@ -5,10 +5,11 @@ from sklearn.neighbors import KNeighborsClassifier
 from scipy.stats import loguniform, uniform, randint
 
 from sklearn.model_selection import RandomizedSearchCV, train_test_split
-from sklearn.model_selection import cross_validate, StratifiedKFold
+from sklearn.model_selection import cross_validate, StratifiedKFold, cross_val_predict
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.naive_bayes import GaussianNB
 
-from sklearn.metrics import accuracy_score, recall_score
+from sklearn.metrics import accuracy_score, recall_score, precision_recall_curve
 
 from sklearn.decomposition import TruncatedSVD # we reduce dimensions to improve performance of classifiers
 from sklearn.linear_model import LogisticRegression
@@ -17,16 +18,19 @@ from sklearn.preprocessing import StandardScaler
 from pathlib import Path
 import email
 from bs4 import BeautifulSoup
+import matplotlib.pyplot as plt
 
-# Folder directory containing the data 
-base_dir = Path(__file__).resolve().parent
+# Folder directory containing the email data. Try/except in case code is run in an interactive environment, where the first 
+# base_dir= does not work.
+try:    
+    base_dir = Path(__file__).resolve().parent
+except NameError:
+    base_dir = Path().cwd() # if running in interactive, just return the working directory
 
-corpus_dir = base_dir / "corpus"
-
-# YOOOO THIS IS MAIN 
+corpus_dir = base_dir / "corpus" # this contains the 2 sub folders: spam / ham
 
 
-# This is a function to extract the meaningful email text from the raw email. 
+# extract_text_from_email will extract the meaningful email text from the raw email. 
 # It's designed to work on a string of raw text extracted from a raw email file. 
 
 def extract_text_from_email(raw_email: str) -> str:
@@ -58,7 +62,24 @@ def extract_text_from_email(raw_email: str) -> str:
 
     return "\n".join(parts).strip() # Return the parts, joined together, and remove any whitespace. 1 string per entire email 
 
-# *: Emails parts come wrapped in MIME transfer encodings (standard that lets email carry more than plain text).
+
+# Function to apply Stratified Cross Validation on the train set, will be used for each model
+
+def evaluate_cv(model, name=None, X=None, y=None, folds=3):
+    scoring =["precision", "recall"]
+
+    cv = StratifiedKFold(n_splits=folds)
+
+    scores = cross_validate(model, X, y,cv=cv, 
+                   scoring=scoring, n_jobs=-1)
+    
+    mean_precision= scores["test_precision"].mean()
+    mean_recall = scores["test_recall"].mean()
+    mean_f1 = 2 / ((1/mean_precision) + (1/mean_recall))
+
+    print(f"The CV mean precision and mean recall of the model {name} are {mean_precision}, {mean_recall} respectively")
+    print(f"The CV mean F1 score of the model {name} is {mean_f1}")
+# *: Emails parts come wrapped in MIME transfer encodings (things that lets email carry more than plain text).
 # We decode these to get raw bytes and then maps each raw byte to the corresponding Latin-1 chart.
 
 #################################################################
@@ -72,7 +93,7 @@ for label in ("spam", "ham"): # iterating over the 2 sub folders
 
     folder = corpus_dir / label # the 2 folders are: path/spam or path/ham 
 
-    for file_path in folder.iterdir(): # going to the actual subfolder that contains each email
+    for file_path in folder.iterdir(): # going to the actual subfolder that contains each email and iterating over the email files
 
         raw = file_path.read_text(encoding="latin-1", errors="ignore") # gather the entire text from the file.
 
@@ -83,6 +104,7 @@ for label in ("spam", "ham"): # iterating over the 2 sub folders
         
 ############################################################
 
+# Printing some basic informatory things
 df = pd.DataFrame(records)
 
 print(">> Data head and tail:")
@@ -92,8 +114,10 @@ print(df.tail())
 
 print(">> Initial data shape: ", df.shape)
 
-df_num = df
 
+# Changing label from SPAM/ HAM to 1 and 0 RESPECTIVELY
+
+df_num = df
 for i in range(len(df)):
     df_num.loc[i,"label"] = 1 if df.loc[i,"label"] == "spam" else 0 
 
@@ -146,7 +170,12 @@ X = df_num[["text"]]
 y = df_num["label"]
 y = y.astype(int)
 
-X_train, X_test, y_train, y_test = train_test_split(X, y, shuffle=True, test_size=0.3, stratify = y)
+X_train, X_test, y_train, y_test = train_test_split(X, y, shuffle=True, test_size=0.3, stratify = y, random_state=42)
+
+### TEMPORARY MEASURE: Cutting train and test sets to 50% of their original size, to reduce compute time 
+X_train, X_test = X_train[:int(0.5 * len(X_train))], X_test[:int(0.5 * len(X_test))]
+y_train, y_test = y_train[:int(0.5 * len(y_train))], y_test[:int(0.5 * len(y_test))]
+###
 
 
 # Transformer to apply stopword & number removal, and return a clean string. 
@@ -166,13 +195,14 @@ ct = ColumnTransformer(
         ("clean_email", clean_and_vect, "text")], 
     remainder="drop")
 
-trunc_svd = TruncatedSVD(n_components=200, random_state=42)
+trunc_svd = TruncatedSVD(n_components=150, random_state=42)
 
 preprocessing_pipeline = make_pipeline(ct, 
                         trunc_svd, 
                         StandardScaler()) # we apply standardization because SVD outputs are unscaled - bad for some classifiers
 
-# Pipeline to apply the preprocessing process and apply LogisticRegression
+
+# Pipeline to apply preprocessing and then -> LogisticRegression
 
 log_reg_pipeline = make_pipeline(preprocessing_pipeline, 
                         LogisticRegression())
@@ -181,7 +211,8 @@ preprocessing_pipeline.fit(X_train)
 
 svd_fitted = preprocessing_pipeline.named_steps["truncatedsvd"]
 
-print(f">> Variance captured by Trunc. SVD at 200 components: {svd_fitted.explained_variance_ratio_.sum()}")
+# Variance captured by the reduced dimensions of the data with trunc. SVD
+print(f">> Variance captured by Trunc. SVD at 150 components: {svd_fitted.explained_variance_ratio_.sum()}")
 
 
 ### RANDOMIZED SEARCH: FIND BEST PARAMETERS for LOGIT REGRESSION
@@ -209,23 +240,34 @@ print(">> Randomized search CV - logistic regression - best params: ", log_reg_s
 # Flattening because of requirements of some function later on 
 y_train.values.ravel()
 
-# Function to cross evaluate model on the train set 
-def evaluate_cv(model, name=None, X=None, y=None, folds=3):
-    scoring =["precision", "recall"]
-
-    cv = StratifiedKFold(n_splits=folds)
-
-    scores = cross_validate(model, X, y,cv=cv, 
-                   scoring=scoring, n_jobs=-1)
-    
-    mean_precision= scores["test_precision"].mean()
-    mean_recall = scores["test_recall"].mean()
-    mean_f1 = 2 / ((1/mean_precision) + (1/mean_recall))
-
-    print(f"The CV mean precision and mean recall of the model {name} are {mean_precision}, {mean_recall} respectively")
-    print(f"The CV mean F1 score of the model {name} is {mean_f1}")
-
+# Evaluation scores for Logistic Regression
 evaluate_cv(model = log_reg_search, name = "Logistic Regression (with truncated SVD)", X = X_train, y = y_train)
+
+cv = StratifiedKFold(n_splits=3)
+
+
+#Out Of Fold (oof) predicted probabilities for the train set using cross validation predict.
+
+def PR_curve_oof(model, X, y, name=None):
+    cv = StratifiedKFold(n_splits=3)
+
+    scores_oof = cross_val_predict(
+        model, X, y,
+        cv=cv,
+        method = "predict_proba"
+    )[:,1] 
+
+    precisions, recalls, thresholds = precision_recall_curve(y_train, scores_oof)
+
+    plt.plot(recalls, precisions, label=name)
+    plt.xlabel("Recall")
+    plt.ylabel("Precisions")
+    plt.title(f"Precision Recall (PR) Curve - {name}")
+    plt.grid(True)
+    plt.legend(loc="lower left")
+    plt.show(block=False)
+
+PR_curve_oof(log_reg_search, X_train, y_train, name="Logistic Regression")
 
 ### RANDOM FOREST CLASSIFIER
 
@@ -234,7 +276,7 @@ rf_pipeline = make_pipeline(preprocessing_pipeline,
 
 
 rf_params = {"randomforestclassifier__min_samples_split": [2, 4, 6],
-             "randomforestclassifier__n_estimators": [100,130,180],
+             "randomforestclassifier__n_estimators": [120,150,200],
              "randomforestclassifier__max_depth": [8, 12, 16]}
 
 
@@ -242,14 +284,30 @@ rf_search = RandomizedSearchCV(rf_pipeline,
                                rf_params, 
                                cv = 3,
                                refit=True,
-                               scoring="f1",
+                               scoring="recall",
                                random_state=42,
                                n_jobs=-1)
 
 rf_search.fit(X_train, y_train)
 
+PR_curve_oof(rf_search, X_train, y_train, name="Random Forest Classifier")
+
+input("Press enter to continue: ")
+
 print(">> Randomized search CV - Random Forest clf. - best params: ", rf_search.best_params_)
 
+# CV scores for Random Forest Classifier 
 evaluate_cv(model = rf_search, name = "Random Forest Classifier", X=X_train, y=y_train)
+
+
+### GAUSSIAN NAIVE BAYES CLASSIFIER 
+
+naive_bayes_pipeline = make_pipeline(preprocessing_pipeline, 
+                                     GaussianNB())
+
+naive_bayes_pipeline.fit(X_train, y_train)
+
+evaluate_cv(model=naive_bayes_pipeline, name ="Gaussian Naive Bayes Classifier", X=X_train, y=y_train)
+
 
 
