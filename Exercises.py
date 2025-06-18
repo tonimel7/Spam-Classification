@@ -15,7 +15,7 @@ from pathlib import Path
 import email
 from bs4 import BeautifulSoup
 import matplotlib.pyplot as plt
-from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 from sklearn.pipeline import make_pipeline, Pipeline
@@ -163,7 +163,6 @@ print(df.tail())
 
 print(">> Initial data shape: ", df.shape)
 
-
 # Changing label from SPAM/ HAM to 1 and 0 RESPECTIVELY
 
 df_num = df
@@ -192,47 +191,48 @@ y = y.astype(int)
 X_train, X_test, y_train, y_test = train_test_split(X, y, shuffle=True, test_size=0.3, stratify = y, random_state=42)
 
 ### TEMPORARY MEASURE: Cutting train and test sets to 50% of their original size, to reduce compute time 
-X_train, X_test = X_train[:int(0.5 * len(X_train))], X_test[:int(0.5 * len(X_test))]
-y_train, y_test = y_train[:int(0.5 * len(y_train))], y_test[:int(0.5 * len(y_test))]
+X_train, X_test = X_train[:int(0.6 * len(X_train))], X_test[:int(0.5 * len(X_test))]
+y_train, y_test = y_train[:int(0.6 * len(y_train))], y_test[:int(0.5 * len(y_test))]
 ###
 
 
+vect = TfidfVectorizer(stop_words="english")
+
 # Transformer to apply stopword & number removal, and return a clean string. 
-stopword_transformer = FunctionTransformer(clean_series, validate=False)
+#stopword_transformer = FunctionTransformer(clean_series, validate=False) # !!!!
 
 
 # The below pipeline handles stopword and number removal, and transforms into a Document Term Matrix (DTM). 
 
 clean_and_vect = make_pipeline(
-    stopword_transformer,
-    CountVectorizer()
+    #stopword_transformer # !!!!!
+    vect
 )
 
 # This transformation applies the pipeline in the email text column 
 ct = ColumnTransformer(
     transformers = [
-        ("clean_email", clean_and_vect, "text")], 
+        ("clean_email", clean_and_vect, "text")],  
     remainder="drop")
 
-trunc_svd = TruncatedSVD(n_components=150, random_state=42)
+trunc_svd = TruncatedSVD(n_components=500, random_state=42)
 
-preprocessing_pipeline = make_pipeline(ct, 
-                        trunc_svd, 
-                        StandardScaler()) # we apply standardization because SVD outputs are unscaled - bad for some classifiers
+preprocessing_pipeline = make_pipeline(ct,
+                        trunc_svd)  #!!!!!
+                        #StandardScaler()) # we apply standardization because SVD outputs are unscaled - bad for some classifiers  #!!
 
 
 # Pipeline to apply preprocessing and then -> LogisticRegression
 
 log_reg_pipeline = make_pipeline(preprocessing_pipeline, 
-                        LogisticRegression())
+                        LogisticRegression(random_state=42))
 
-preprocessing_pipeline.fit(X_train)
+# preprocessing_pipeline.fit(X_train) #!!!
 
-svd_fitted = preprocessing_pipeline.named_steps["truncatedsvd"]
+# svd_fitted = preprocessing_pipeline.named_steps["truncatedsvd"] #!!!
 
 # Variance captured by the reduced dimensions of the data with trunc. SVD
-print(f">> Variance captured by Trunc. SVD at 150 components: {svd_fitted.explained_variance_ratio_.sum()}")
-
+# print(f">> Variance captured by Trunc. SVD at 150 components: {svd_fitted.explained_variance_ratio_.sum()}") #!!
 
 ### LOGISTIC REGRESSION: RANDOMIZED SEARCH CV
 
@@ -254,6 +254,15 @@ log_reg_search = RandomizedSearchCV(
 log_reg_search.fit(X_train, y_train)
 
 print(">> Randomized search CV - logistic regression - best params: ", log_reg_search.best_params_)
+
+svd_only = (log_reg_search.best_estimator_
+            .named_steps["pipeline"]
+            .named_steps["truncatedsvd"])
+
+print(f"The explained variance captured by Trunc. SVD is: {svd_only.explained_variance_ratio_.sum()}")
+
+input("Please press enter to continue ")
+
 
 ####
 # Flattening because of requirements of some function later on 
