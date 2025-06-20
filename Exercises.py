@@ -23,6 +23,13 @@ from sklearn.pipeline import make_pipeline, Pipeline
 from sklearn.preprocessing import FunctionTransformer
 from sklearn.compose import ColumnTransformer
 
+""""
+The following code turns folders of raw "spam" and "ham"(normal) emails into a labeled DataFrame. After some preprocessing,
+the aim is to apply Binary Classification techniques to predict if an email is spam or not based on text attributes. Classifiers applied are
+Logistic Regression, Random Forest Classifier and Gaussian Naive bayes. Logistic Regression is the best individual model with over 90% precision 
+and recall. 
+"""
+
 # Folder directory containing the email files. Try/except is put here in case the code is run in an interactive environment
 # where the first base_dir= does not work.
 try:    
