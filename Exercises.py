@@ -81,7 +81,7 @@ def evaluate_cv(model, name=None, X=None, y=None, folds=3):
     cv = StratifiedKFold(n_splits=folds)
 
     scores = cross_validate(model, X, y,cv=cv, 
-                   scoring=scoring, n_jobs=-1)
+                   scoring=scoring, n_jobs=2)
     
     mean_precision= scores["test_precision"].mean()
     mean_recall = scores["test_recall"].mean()
@@ -98,7 +98,7 @@ def PR_curve_oof(model, X, y, name=None):
     scores_oof = cross_val_predict( # out of fold prediction scores for X.
         model, X, y,
         cv=cv,
-        method = "predict_proba"
+        method = "predict_proba", n_jobs=2
     )[:,1] 
 
     precisions, recalls, thresholds = precision_recall_curve(y_train, scores_oof)
@@ -171,8 +171,6 @@ y = shuffle(y, random_state=42)
 X = X[:int(0.7* len(X))]
 y = y[:int(0.7*len(y))]
 
-input("please press enter to continue ")
-
 X_train, X_test, y_train, y_test = train_test_split(X, y, shuffle=True, test_size=0.3, stratify = y, random_state=42)
 
 vect = TfidfVectorizer(stop_words="english") # stop_words="english" to remove stopwords.
@@ -210,7 +208,7 @@ log_reg_search = RandomizedSearchCV(
     refit=True,
     scoring="f1",
     random_state=42,
-    n_jobs=-1
+    n_jobs=2
 )
 
 log_reg_search.fit(X_train, y_train)
@@ -222,8 +220,6 @@ svd_only = (log_reg_search.best_estimator_
             .named_steps["truncatedsvd"])
 
 print(f"The explained variance captured by Trunc. SVD is: {svd_only.explained_variance_ratio_.sum()}")
-
-input("Please press enter to continue ")
 
 y_train.values.ravel() # Flattening because of requirements of some function later on 
 
@@ -249,13 +245,12 @@ rf_search = RandomizedSearchCV(rf_pipeline,
                                refit=True,
                                scoring="recall",
                                random_state=42,
-                               n_jobs=-1)
+                               n_jobs=2)
 
 rf_search.fit(X_train, y_train)
 
 PR_curve_oof(rf_search, X_train, y_train, name="Random Forest Classifier")
 
-input("Press enter to continue: ")
 
 print(">> Randomized search CV - Random Forest clf. - best params: ", rf_search.best_params_)
 
