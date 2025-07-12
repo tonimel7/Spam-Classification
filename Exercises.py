@@ -27,7 +27,7 @@ from sklearn.compose import ColumnTransformer
 The following code turns folders of raw "spam" and "ham"(normal) emails into a labeled DataFrame. After some preprocessing,
 the aim is to apply Binary Classification techniques to predict if an email is spam or not based on text attributes. Classifiers applied are
 Logistic Regression, Random Forest Classifier and Gaussian Naive bayes. Logistic Regression is the best individual model with over 90% precision 
-and recall. I expected Random Forests to be more accurate in this task. 
+and recall in cross-validation scores. I expected Random Forests to be more accurate in this task. 
 """
 
 # Folder directory containing the email files. Try/except is put here in case the code is run in an interactive environment
